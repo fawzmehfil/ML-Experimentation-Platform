@@ -1,30 +1,33 @@
 # ML Experimentation Platform
 
-A full-stack platform for training, evaluating, and comparing machine learning models with built-in preprocessing, experiment tracking, and performance visualization.
+A full-stack system for **structured experimentation with supervised machine learning models**, providing dataset validation, reproducible preprocessing pipelines, model training, and comparative evaluation.
+
+![Demo](assets/demo.png)
 
 ---
 
 ## Overview
 
-This project provides an end-to-end workflow for machine learning experimentation:
+This project implements an end-to-end workflow for tabular ML tasks, centered around **reproducibility, comparability, and pipeline correctness**.
 
-- Upload and validate datasets
-- Build preprocessing pipelines automatically
-- Train multiple models in parallel
-- Evaluate performance using standard metrics
-- Track experiment history and compare results
+It supports:
 
-Designed as a lightweight ML platform combining backend pipelines with a React-based interface.
+- Dataset ingestion with schema inference and validation
+- Deterministic preprocessing via composable pipelines
+- Parallel training across multiple estimators
+- Standardized evaluation using task-appropriate metrics
+- Persistent experiment tracking for cross-run comparison
+
 
 ---
 
 ## Tech Stack
 
-- Backend: Flask, Python  
-- ML: scikit-learn, pandas, numpy  
-- Frontend: React, Recharts, Axios  
-- Storage: SQLite + local file system  
-- API: REST (JSON)
+- **Backend**: Flask (Python)
+- **ML / Data**: scikit-learn, pandas, numpy
+- **Frontend**: React, Recharts, Axios
+- **Storage**: SQLite (metadata) + local file system (datasets)
+- **API**: REST (JSON)
 
 ---
 
