@@ -12,12 +12,22 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Response interceptor: normalize error messages
+// Response interceptor: unwrap the backend response envelope and normalize errors.
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    if (response.data && typeof response.data === 'object' && 'success' in response.data) {
+      return {
+        ...response,
+        data: response.data.data,
+        meta: response.data.meta || {},
+      };
+    }
+    return response;
+  },
   (error) => {
+    const apiError = error.response?.data?.error;
     const message =
-      error.response?.data?.error ||
+      apiError?.message ||
       error.response?.data?.message ||
       error.message ||
       'An unexpected error occurred';

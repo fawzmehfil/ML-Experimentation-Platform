@@ -1,16 +1,127 @@
-"""
-services/experiment_service.py
-Orchestrates the full ML pipeline: load → preprocess → train → evaluate.
-Acts as the bridge between routes and ML logic.
-"""
+import logging
+import uuid
+from datetime import datetime, timezone
 
 import pandas as pd
-import numpy as np
 
 from ml.preprocessor import build_preprocessing_pipeline, split_data
 from ml.trainer import train_models
 from ml.evaluator import evaluate_models
 from ml.explainer import extract_feature_importance
+from repositories import dataset_repository, experiment_repository
+from utils.exceptions import InternalServerError, NotFoundError, UnprocessableEntityError, ValidationError
+
+
+logger = logging.getLogger(__name__)
+
+
+def create_experiment_run(request_data: dict, *, db_path: str) -> dict:
+    dataset = dataset_repository.get_dataset(db_path, request_data["dataset_id"])
+    if not dataset:
+        raise NotFoundError("Dataset not found")
+
+    if request_data["target_column"] not in dataset["columns"]:
+        raise ValidationError(f"Target column '{request_data['target_column']}' not found in dataset")
+
+    prior_runs = experiment_repository.list_prior_runs(
+        db_path,
+        dataset_id=request_data["dataset_id"],
+        target_column=request_data["target_column"],
+        task_type=request_data["task_type"],
+    )
+    run_number = len(prior_runs) + 1
+
+    logger.info(
+        "experiment_creation_started",
+        extra={
+            "dataset_id": request_data["dataset_id"],
+            "target_column": request_data["target_column"],
+            "task_type": request_data["task_type"],
+            "models": request_data["models"],
+            "run_number": run_number,
+        },
+    )
+
+    try:
+        results = run_experiment_pipeline(
+            filepath=dataset["filepath"],
+            target_column=request_data["target_column"],
+            task_type=request_data["task_type"],
+            model_names=request_data["models"],
+            preprocessing_config=request_data["preprocessing"],
+        )
+    except ValueError as error:
+        logger.warning("experiment_rejected", extra={"dataset_id": request_data["dataset_id"], "reason": str(error)})
+        raise UnprocessableEntityError(str(error))
+    except Exception as error:
+        logger.exception("experiment_training_failed", extra={"dataset_id": request_data["dataset_id"]})
+        raise InternalServerError(f"Training failed: {str(error)}")
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    stability_history = _build_stability_history(prior_runs, results["metrics"], run_number, created_at)
+    experiment_id = str(uuid.uuid4())
+
+    experiment_repository.create_experiment(db_path, {
+        "id": experiment_id,
+        "dataset_id": request_data["dataset_id"],
+        "dataset_name": dataset["filename"],
+        "target_column": request_data["target_column"],
+        "task_type": request_data["task_type"],
+        "models_trained": request_data["models"],
+        "preprocessing_config": request_data["preprocessing"],
+        "metrics": results["metrics"],
+        "feature_importance": results.get("feature_importance", {}),
+        "stability_history": stability_history,
+        "run_number": run_number,
+        "created_at": created_at,
+    })
+
+    logger.info(
+        "experiment_creation_completed",
+        extra={"experiment_id": experiment_id, "best_model": results.get("best_model"), "run_number": run_number},
+    )
+
+    return {
+        "experiment_id": experiment_id,
+        "run_number": run_number,
+        "metrics": results["metrics"],
+        "feature_importance": results.get("feature_importance", {}),
+        "best_model": results.get("best_model"),
+        "summary_text": results.get("summary_text"),
+        "stability_history": stability_history,
+        "created_at": created_at,
+    }
+
+
+def list_experiments(db_path: str) -> list[dict]:
+    return experiment_repository.list_experiments(db_path)
+
+
+def get_experiment(experiment_id: str, *, db_path: str) -> dict:
+    experiment = experiment_repository.get_experiment(db_path, experiment_id)
+    if not experiment:
+        raise NotFoundError("Experiment not found")
+    return experiment
+
+
+def build_leaderboard(db_path: str, *, limit: int = 20) -> list[dict]:
+    entries = []
+    for experiment in experiment_repository.list_experiments(db_path):
+        best_model, best_score = _best_score_for_experiment(experiment)
+        entries.append({
+            "experiment_id": experiment["id"],
+            "dataset_name": experiment["dataset_name"],
+            "target_column": experiment["target_column"],
+            "task_type": experiment["task_type"],
+            "best_model": best_model,
+            "best_score": best_score,
+            "metric_label": "R²" if experiment["task_type"] == "regression" else "F1",
+            "run_number": experiment["run_number"],
+            "created_at": experiment["created_at"],
+        })
+
+    entries.sort(key=lambda entry: entry["best_score"] if entry["best_score"] is not None else -999, reverse=True)
+    return entries[:limit]
 
 
 def run_experiment_pipeline(
@@ -86,6 +197,7 @@ def run_experiment_pipeline(
 
     # --- 7. Train models ---
     use_cv = preprocessing_config.get("use_cross_validation", False)
+    logger.info("training_started", extra={"models": model_names, "task_type": task_type})
     trained_models = train_models(
         model_names=model_names,
         task_type=task_type,
@@ -95,6 +207,7 @@ def run_experiment_pipeline(
     )
 
     # --- 8. Evaluate on test set ---
+    logger.info("evaluation_started", extra={"models": list(trained_models), "task_type": task_type})
     metrics = evaluate_models(
         trained_models=trained_models,
         task_type=task_type,
@@ -112,6 +225,7 @@ def run_experiment_pipeline(
     # --- 10. Identify best model and generate summary ---
     best_model = _find_best_model(metrics, task_type)
     summary_text = _generate_summary(metrics, task_type, best_model, len(df))
+    logger.info("evaluation_completed", extra={"best_model": best_model, "task_type": task_type})
 
     return {
         "metrics": metrics,
@@ -119,6 +233,42 @@ def run_experiment_pipeline(
         "best_model": best_model,
         "summary_text": summary_text,
     }
+
+
+def _build_stability_history(
+    prior_runs: list[dict],
+    current_metrics: dict,
+    run_number: int,
+    created_at: str,
+) -> list[dict]:
+    stability_history = [
+        {
+            "run_number": index + 1,
+            "metrics": run["metrics"],
+            "created_at": run["created_at"],
+        }
+        for index, run in enumerate(prior_runs)
+    ]
+    stability_history.append({
+        "run_number": run_number,
+        "metrics": current_metrics,
+        "created_at": created_at,
+    })
+    return stability_history
+
+
+def _best_score_for_experiment(experiment: dict) -> tuple[str | None, float | None]:
+    metric_key = "r2" if experiment["task_type"] == "regression" else "f1"
+    best_model = None
+    best_score = None
+
+    for model_name, metrics in experiment["metrics"].items():
+        score = metrics.get(metric_key, -999)
+        if best_score is None or score > best_score:
+            best_model = model_name
+            best_score = score
+
+    return best_model, best_score
 
 
 def _get_feature_names(pipeline, X_train: pd.DataFrame) -> list[str]:
@@ -144,7 +294,7 @@ def _find_best_model(metrics: dict, task_type: str) -> str:
 def _generate_summary(metrics: dict, task_type: str, best_model: str, n_samples: int) -> str:
     """
     Generate a human-readable summary of results.
-    Simple but useful for portfolio demonstrations.
+    Generate concise result context for the UI and exports.
     """
     m = metrics.get(best_model, {})
     lines = [

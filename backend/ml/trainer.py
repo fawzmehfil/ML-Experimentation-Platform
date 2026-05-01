@@ -5,7 +5,7 @@ Supports optional cross-validation for more robust performance estimates.
 """
 
 import numpy as np
-from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
+from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 from sklearn.model_selection import cross_val_score
@@ -19,7 +19,7 @@ MODEL_REGISTRY = {
     "gradient_boosting": (GradientBoostingRegressor, GradientBoostingClassifier),
 }
 
-# Default hyperparameters — reasonable for a portfolio project
+# Default hyperparameters for reproducible local training.
 MODEL_PARAMS = {
     "linear_regression": {},
     "logistic_regression": {"max_iter": 1000, "random_state": 42},

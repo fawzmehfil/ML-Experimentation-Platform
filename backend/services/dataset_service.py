@@ -1,11 +1,90 @@
-"""
-services/dataset_service.py
-Handles CSV validation and statistical profiling.
-Clean separation from routing logic — good SWE practice.
-"""
+import logging
+import os
+import uuid
+from datetime import datetime, timezone
 
 import pandas as pd
 import numpy as np
+from werkzeug.datastructures import FileStorage
+from werkzeug.utils import secure_filename
+
+from repositories import dataset_repository
+from utils.exceptions import NotFoundError, UnprocessableEntityError, ValidationError
+
+
+logger = logging.getLogger(__name__)
+
+
+def upload_dataset(file: FileStorage | None, *, upload_folder: str, db_path: str) -> dict:
+    if file is None:
+        raise ValidationError("No file part in request")
+    if file.filename == "":
+        raise ValidationError("No file selected")
+    if not file.filename.lower().endswith(".csv"):
+        raise ValidationError("Only CSV files are supported")
+
+    dataset_id = str(uuid.uuid4())
+    original_filename = secure_filename(file.filename)
+    saved_filename = f"{dataset_id}_{original_filename}"
+    filepath = os.path.join(upload_folder, saved_filename)
+
+    logger.info("dataset_upload_started", extra={"dataset_id": dataset_id, "dataset_filename": original_filename})
+    file.save(filepath)
+
+    try:
+        profile = validate_and_profile_csv(filepath)
+    except ValueError as error:
+        _remove_file(filepath)
+        logger.warning("dataset_upload_rejected", extra={"dataset_id": dataset_id, "reason": str(error)})
+        raise UnprocessableEntityError(str(error))
+    except Exception as error:
+        _remove_file(filepath)
+        logger.exception("dataset_upload_failed", extra={"dataset_id": dataset_id})
+        raise UnprocessableEntityError(f"Failed to parse CSV: {str(error)}")
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    dataset_repository.create_dataset(db_path, {
+        "id": dataset_id,
+        "filename": original_filename,
+        "filepath": filepath,
+        "num_rows": profile["num_rows"],
+        "num_cols": profile["num_cols"],
+        "columns": profile["columns"],
+        "dtypes": profile["dtypes"],
+        "missing": profile["missing"],
+        "created_at": created_at,
+    })
+
+    logger.info(
+        "dataset_upload_completed",
+        extra={"dataset_id": dataset_id, "rows": profile["num_rows"], "columns": profile["num_cols"]},
+    )
+    return {
+        "dataset_id": dataset_id,
+        "filename": original_filename,
+        "profile": profile,
+        "created_at": created_at,
+    }
+
+
+def get_dataset_summary(dataset_id: str, *, db_path: str) -> dict:
+    dataset = dataset_repository.get_dataset(db_path, dataset_id)
+    if not dataset:
+        raise NotFoundError("Dataset not found")
+
+    try:
+        df = pd.read_csv(dataset["filepath"], nrows=10)
+        preview = df.fillna("").to_dict(orient="records")
+    except Exception:
+        logger.exception("dataset_preview_failed", extra={"dataset_id": dataset_id})
+        preview = []
+
+    dataset["preview"] = preview
+    return dataset
+
+
+def list_datasets(db_path: str) -> list[dict]:
+    return dataset_repository.list_datasets(db_path)
 
 
 def validate_and_profile_csv(filepath: str) -> dict:
@@ -86,3 +165,10 @@ def _safe_float(val) -> float | None:
         return None if np.isnan(f) else round(f, 4)
     except (TypeError, ValueError):
         return None
+
+
+def _remove_file(filepath: str) -> None:
+    try:
+        os.remove(filepath)
+    except FileNotFoundError:
+        pass

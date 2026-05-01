@@ -1,10 +1,4 @@
-"""
-ml/preprocessor.py
-Builds scikit-learn preprocessing pipelines and handles train/val/test splitting.
-
-Design: all preprocessing logic is encapsulated here so experiments are
-reproducible and the pipeline can be described clearly in an interview.
-"""
+"""Preprocessing pipelines and train/validation/test splitting."""
 
 import numpy as np
 import pandas as pd
@@ -61,8 +55,7 @@ def build_preprocessing_pipeline(
     - Numeric: imputation + optional scaling
     - Categorical: imputation + one-hot encoding
 
-    Using ColumnTransformer is the sklearn-idiomatic way to handle
-    mixed-type data — worth knowing for interviews.
+    Uses ColumnTransformer to handle mixed numeric and categorical data.
     """
     numeric_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
     categorical_cols = X_train.select_dtypes(exclude=[np.number]).columns.tolist()

@@ -61,8 +61,11 @@ It supports:
 
 ```
 backend/
+  ├── config.py            # Environment-driven app settings
   ├── routes/              # API endpoints
   ├── services/            # Dataset + experiment orchestration
+  ├── repositories/        # SQLite data access
+  ├── utils/               # API responses, validation, exceptions
   ├── ml/                  # Preprocessing, training, evaluation
   └── models/              # SQLite helpers
 
@@ -90,7 +93,10 @@ pip install -r requirements.txt
 python app.py
 ```
 
-API: http://localhost:5000/api
+API: http://localhost:5001/api
+
+Backend configuration is environment-based. Copy `backend/.env.example` to
+`backend/.env` and adjust paths, logging, CORS, and server settings as needed.
 
 ### Frontend
 

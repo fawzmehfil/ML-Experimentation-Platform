@@ -1,8 +1,4 @@
-"""
-models/database.py
-SQLite schema initialization and connection helper.
-Keeping it simple and dependency-free (no ORM) — easy to explain in interviews.
-"""
+"""SQLite schema initialization and connection helpers."""
 
 import sqlite3
 import json
